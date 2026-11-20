@@ -53,6 +53,12 @@ git push -u origin main
 到 GitHub repo → **Settings → Pages** → Source 選 **Deploy from a branch**，Branch 選 `main` / `/ (root)` → Save。
 一兩分鐘後網址會是 `https://DER22222222.github.io/our-map/`。
 
+之後只要改了 `config.js` 或任何檔案，推上去 Pages 就會自動更新：
+
+```powershell
+git add . ; git commit -m "更新" ; git push
+```
+
 ### 5. 加到手機主畫面
 
 - **iPhone**：用 Safari 打開網址 → 分享 → 加入主畫面
@@ -63,6 +69,7 @@ git push -u origin main
 ## 使用小提醒
 
 - **照片沒有帶到位置？** iPhone 從相簿選照片時，要點上方的「選項」把「位置」打開，網頁才讀得到 GPS
+- **Android（POCO F6）**：原檔的 EXIF 裡確實有 GPS，但系統的相片挑選器有可能把位置遮掉。如果從相簿選讀不到，改用檔案管理（「檔案」或「我的檔案」）從 `DCIM/Camera` 選原檔試試；也可以打開 `tools-exif-test.html` 看診斷訊息
 - 點上面已經選中的旅程（有 ✎ 的那個），可以改名、換顏色或刪除
 - 沒有日期的地點會排在旅程的最後面
 - 從背景切回 App 時會自動重新整理，看得到對方剛新增的內容
