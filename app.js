@@ -28,6 +28,26 @@ function toast(msg, ms = 2600) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
+// 自己做的確認視窗：native confirm() 在部分瀏覽器／內嵌環境會被擋掉並直接回 false，
+// 按鈕看起來沒反應。用 app 自己的視窗才不會靜默失敗。
+function askConfirm(msg, okText = '刪除') {
+  return new Promise(resolve => {
+    const box = $('#confirm'), yes = $('#confirm-yes'), no = $('#confirm-no');
+    $('#confirm-msg').textContent = msg;
+    yes.textContent = okText;
+    const done = v => {
+      box.hidden = true;
+      yes.onclick = no.onclick = box.onclick = null;
+      resolve(v);
+    };
+    yes.onclick = () => done(true);
+    no.onclick = () => done(false);
+    box.onclick = e => { if (e.target === box) done(false); };
+    box.hidden = false;
+    yes.focus();
+  });
+}
+
 function fmtDate(d) {
   if (!d) return '';
   const [y, m, day] = d.split('-').map(Number);
@@ -254,7 +274,7 @@ async function openDetail(id) {
 
 async function deletePlace(id) {
   const p = state.places.find(x => x.id === id);
-  if (!confirm(`確定要刪除「${p?.name || '這個地點'}」嗎？照片也會一起刪掉。`)) return;
+  if (!await askConfirm(`確定要刪除「${p?.name || '這個地點'}」嗎？照片也會一起刪掉。`)) return;
   const paths = (state.photos[id] || []).flatMap(x => [x.path, x.thumb_path]);
   if (paths.length) await sb.storage.from(BUCKET).remove(paths);
   const { error } = await sb.from('places').delete().eq('id', id);
@@ -532,7 +552,7 @@ function openTripEditor(id, thenAdd = false) {
   };
   $('#t-del', sh)?.addEventListener('click', async () => {
     const n = tripPlaces(t.id).length;
-    if (!confirm(`確定要刪除「${t.title}」嗎？${n ? `裡面的 ${n} 個地點和所有照片都會一起刪掉。` : ''}`)) return;
+    if (!await askConfirm(`確定要刪除「${t.title}」嗎？${n ? `裡面的 ${n} 個地點和所有照片都會一起刪掉。` : ''}`)) return;
     const paths = tripPlaces(t.id).flatMap(p => (state.photos[p.id] || []).flatMap(x => [x.path, x.thumb_path]));
     for (let i = 0; i < paths.length; i += 100) await sb.storage.from(BUCKET).remove(paths.slice(i, i + 100));
     const { error } = await sb.from('trips').delete().eq('id', t.id);

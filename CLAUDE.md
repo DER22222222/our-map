@@ -84,7 +84,20 @@
 唯一還沒驗的是：Android Chrome 從相簿挑照片時，系統會不會因為沒有 ACCESS_MEDIA_LOCATION 而遮蔽位置。
 這要等推上 GitHub Pages 後，在使用者手機上實測。
 
-測試資料還留在資料庫裡（旅程名稱就叫「測試旅程（可刪）」），使用者可以自己在 app 裡刪掉。
+### 刪除按鈕沒反應：native confirm() 會被擋掉
+
+使用者回報「旅程刪不掉」。按下「刪除旅程」完全沒反應，也沒有錯誤訊息。
+
+原因不是權限——用 client 直接打 `storage.remove()` + `trips.delete()` 完全正常。
+問題是 `window.confirm()` 在部分瀏覽器／內嵌環境會被自動取消並**立刻回傳 false**
+（在 Claude 的瀏覽器窗格裡實測就是這樣），程式走到 `if (!confirm(...)) return;` 就安靜地結束了。
+
+已改成 app 自己的確認視窗 `askConfirm()`（`index.html` 的 `#confirm` + `style.css` 的樣式 + `app.js` 的 Promise helper），
+兩個呼叫端（刪地點、刪旅程）都換掉了。**不要再用 native confirm()／alert()／prompt()。**
+
+實測：確認視窗正常跳出 → 按刪除 → 旅程、地點、照片、storage 檔案全部清掉（trips/places/photos 都是 0，bucket 也空了），cascade 和 storage 清理都正確。
+
+測試資料已經全部刪乾淨，資料庫現在是空的。
 
 ## 部署狀態（2026-11-21）
 
