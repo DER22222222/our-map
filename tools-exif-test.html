@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>照片位置測試</title>
+<style>
+  body { margin: 0; padding: 24px 18px; font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; background: #fbf7f1; color: #2b2622; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  p.sub { color: #8a8179; margin: 0 0 20px; font-size: 14px; line-height: 1.6; }
+  label.pick { display: block; text-align: center; padding: 16px; border-radius: 14px; background: #e4572e; color: #fff; font-size: 17px; font-weight: 600; }
+  label.alt { margin-top: 10px; background: #fff; color: #e4572e; border: 2px solid #e4572e; }
+  .card { background: #fff; border: 1px solid #ebe3d8; border-radius: 14px; padding: 14px; margin-top: 14px; }
+  .card img { width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; display: block; margin-bottom: 10px; }
+  .ok { color: #1e8a5a; font-weight: 700; }
+  .no { color: #c0392b; font-weight: 700; }
+  .row { font-size: 14px; color: #5d554e; margin-top: 4px; }
+  a { color: #2e86ab; }
+</style>
+</head>
+<body>
+  <h1>📍 照片位置測試</h1>
+  <p class="sub">選一張用手機相機拍的原始照片，看看網頁讀不讀得到位置。照片只在你的手機上讀取，不會上傳到任何地方。</p>
+  <label class="pick">從相簿選<input type="file" accept="image/*" multiple hidden class="f"></label>
+  <label class="pick alt">從檔案選（保留位置）<input type="file" multiple hidden class="f"></label>
+  <p class="sub" style="margin-top:10px">「從檔案選」打開後，進到 <b>內部儲存空間 → DCIM → Camera</b> 挑照片。</p>
+  <div id="out"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+document.querySelectorAll('.f').forEach(inp => inp.onchange = async e => {
+  const out = document.getElementById('out');
+  out.innerHTML = '';
+  for (const file of e.target.files) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    // exifr lite 版不支援 pick（會丟 undefined is not iterable），只能整包 parse
+    let meta = null, err = '';
+    if (!window.exifr) err = 'exifr 沒載入（可能被網路或 CSP 擋掉）';
+    else { try { meta = await exifr.parse(file); } catch (ex) { err = (ex && ex.message) || String(ex); } }
+    const keys = meta ? Object.keys(meta) : [];
+    const gpsKeys = keys.filter(k => /^GPS/.test(k));
+    const has = meta && isFinite(meta.latitude) && isFinite(meta.longitude);
+    const dt = meta && meta.DateTimeOriginal instanceof Date ? meta.DateTimeOriginal.toLocaleString('zh-TW') : null;
+    card.innerHTML = `
+      <img src="${URL.createObjectURL(file)}" alt="">
+      ${has
+        ? `<div class="ok">✓ 讀得到位置</div>
+           <div class="row">座標：${meta.latitude.toFixed(5)}, ${meta.longitude.toFixed(5)}</div>
+           <div class="row"><a href="https://www.openstreetmap.org/?mlat=${meta.latitude}&mlon=${meta.longitude}#map=18/${meta.latitude}/${meta.longitude}" target="_blank" rel="noopener">在地圖上看 →</a></div>`
+        : `<div class="no">✕ 沒有位置資訊</div>`}
+      <div class="row">拍攝時間：${dt ? esc(dt) : '讀不到'}</div>
+      <div class="row">相機：${meta && (meta.Make || meta.Model) ? esc([meta.Make, meta.Model].filter(Boolean).join(' ')) : '讀不到'}</div>
+      <div class="row">檔名：${esc(file.name)} · ${(file.size / 1024 / 1024).toFixed(2)} MB</div>
+      <div class="row" style="margin-top:10px;padding-top:8px;border-top:1px dashed #ebe3d8">
+        <b>診斷</b><br>
+        讀取工具：${window.exifr ? '已載入' : '<span class="no">沒載入</span>'}<br>
+        讀到的 EXIF 欄位數：${keys.length}<br>
+        有 GPS 欄位：${gpsKeys.length ? `是（${esc(gpsKeys.join(', '))}）` : '<span class="no">否</span>'}<br>
+        錯誤訊息：${err ? `<span class="no">${esc(err)}</span>` : '無'}
+      </div>`;
+    out.appendChild(card);
+  }
+});
+</script>
+</body>
+</html>

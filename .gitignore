@@ -1,0 +1,12 @@
+# 填了真實 email 的本機版 SQL（不要公開，GitHub Pages 的 repo 是 public）
+schema.local.sql
+
+# 編輯器 / 系統雜檔
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+
+# 以防萬一
+node_modules/
