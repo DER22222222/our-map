@@ -15,7 +15,8 @@
 
 ## 技術架構
 - 純前端（沒有 build step）：`index.html`、`style.css`、`app.js`、`config.js`
-- 地圖：Leaflet 1.9.4（unpkg）+ CARTO Voyager 圖磚（OpenStreetMap 資料）
+- 地圖：Leaflet 1.9.4（unpkg）+ **OpenStreetMap 官方圖磚**（`tile.openstreetmap.org`，maxZoom 19）
+  - 原本用 CARTO Voyager，2026-11-21 實測發現 **CARTO 免金鑰的圖磚已經停用**：不管 referer 是什麼，回傳的都是 2KB 的「API KEY REQUIRED」浮水印圖（HTTP 200，不是 403），所以已改掉。不要改回去。
 - 後端：Supabase（登入、Postgres、Storage），supabase-js v2 從 jsdelivr 載入
 - 地名搜尋和反查：Nominatim（`accept-language=zh-TW`）
 - 讀照片 EXIF（GPS、拍攝日期）：exifr lite 7（jsdelivr）
@@ -63,11 +64,44 @@
 - **還沒確認**：Android Chrome 從相簿挑照片時會不會把 GPS 拿掉（沒有 ACCESS_MEDIA_LOCATION 時系統會遮蔽位置）。這要等部署後在使用者手機上實測；在那之前不要假設它是壞的——之前的「讀不到」有很大機會就是上面那兩個 bug
 - 透過 Claude App 上傳的照片會被壓縮（1449×2576），EXIF 全被清掉，不能用來測
 
-## 部署待辦（使用者自己要做，README.md 有步驟）
-1. 建立 Supabase 專案，把 `schema.sql` 裡的兩個 email 改成他們的，執行 SQL
-2. 建立兩人的帳號（Auto Confirm），然後關掉公開註冊
-3. 在 `config.js` 填 Project URL 和 Publishable key（絕對不要放 service_role 或 secret key）
-4. 推上 GitHub，開啟 Pages（main / root）
+## 真的 Supabase 上的端對端實測（2026-11-21，全部通過）
+
+在本機 `python -m http.server` + 手機尺寸 375x812，連真正的 Supabase 跑完整條路：
+
+| 步驟 | 結果 |
+|---|---|
+| 登入 | ✅ 用 members 名單裡的帳號（真實 email 只在 schema.local.sql）|
+| 建旅程 | ✅ 「測試旅程（可刪）」寫進 trips |
+| 📷 用照片的位置 | ✅ 餵進手機原檔，地圖直接跳到 24.7957, 120.9937（陽明交大光復校區）|
+| EXIF 日期自動帶入 | ✅ `visited_on` = 2026-11-18（就是修好的那個 bug）|
+| Nominatim 中文反查 | ✅ 地點名稱自動填「光復路二段」|
+| 照片壓縮＋上傳 | ✅ 2.71 MB → 192 KB，存成 `{place_id}/{uuid}.jpg` 和 `_t.jpg` |
+| 私人 bucket 簽名連結 | ✅ `createSignedUrls` 取得的連結 fetch 回 200 |
+| 地圖標記縮圖 | ✅ 正常顯示 |
+| 重新載入後 | ✅ 30 個資源、0 個失敗、console 無錯誤 |
+
+**所以「照片 GPS 讀不到」在桌面瀏覽器上已經確定解決了**——原因就是 exifr lite 不支援 pick，不是 Android 拿掉 GPS。
+唯一還沒驗的是：Android Chrome 從相簿挑照片時，系統會不會因為沒有 ACCESS_MEDIA_LOCATION 而遮蔽位置。
+這要等推上 GitHub Pages 後，在使用者手機上實測。
+
+測試資料還留在資料庫裡（旅程名稱就叫「測試旅程（可刪）」），使用者可以自己在 app 裡刪掉。
+
+## 部署狀態（2026-11-21）
+
+Supabase **已經設定完成並實測通過**，專案 `our-map`（Region: Northeast Asia / Tokyo）：
+- Project URL `https://jqjlxfcrwcuihpezrhph.supabase.co`，publishable key 已填進 `config.js` 並 commit
+- 資料表、RLS、政策、私人 photos bucket 都建好；members 名單是兩個人的 email
+- 兩個帳號都建好（Auto Confirm），公開註冊已關閉
+
+**踩到的坑：RLS 之外還要 GRANT。** 建專案時沒勾「Grant API access to new tables automatically」，
+所以新表沒有給 `authenticated` 角色權限，app 收到 `42501 permission denied for table trips`，
+畫面症狀是旅程建不起來、console 一堆 403。`schema.sql` 已經補上 `-- 3b. 資料表層級的權限` 那段 GRANT，
+之後在新專案重跑整份 schema 就不會再遇到。`members` 故意不給權限（靠 security definer 的 `is_member()` 代讀）。
+
+**還沒做的只剩 GitHub：**
+1. 開一個 public repo（本機 git 已經 init 好、也 commit 了，見 README 步驟 4）
+2. `git remote add origin ...` 然後 `git push -u origin main`
+3. Settings → Pages → main / root
 
 ## 可以考慮的後續功能（使用者還沒要求）
 - 照片排序或設定封面、地點拖曳排序

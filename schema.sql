@@ -70,6 +70,16 @@ create policy "members only" on public.places
 create policy "members only" on public.photos
   for all to authenticated using (public.is_member()) with check (public.is_member());
 
+-- 3b. 資料表層級的權限
+-- RLS 只決定「哪些列看得到」，還要 GRANT 才有資料表的使用權。
+-- 建專案時如果沒勾「Grant API access to new tables automatically」，
+-- 新表預設不會給 authenticated 權限，app 會收到 42501 permission denied。
+-- members 故意不給權限：is_member() 是 security definer，由它代為讀取。
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.trips  to authenticated;
+grant select, insert, update, delete on public.places to authenticated;
+grant select, insert, update, delete on public.photos to authenticated;
+
 -- 4. 照片儲存空間（私人，不公開）
 insert into storage.buckets (id, name, public)
 values ('photos', 'photos', false);
