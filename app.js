@@ -16,7 +16,9 @@ if (!cfg.supabaseUrl || !/^https:\/\//.test(cfg.supabaseUrl) || cfg.supabaseUrl.
 const sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey);
 if (cfg.title) { document.title = cfg.title; $('#login-title').textContent = cfg.title; }
 
-const state = { trips: [], places: [], photos: {}, urls: {}, urlsAt: 0, active: null, user: null };
+// 分層：類別（有名字、有顏色）→ 底下可以是「旅程」（多點連線）或「單點」（trip_id 是 null，不連線）
+// active = 選中的類別 id，activeTrip = 該類別裡選中的旅程 id（null 代表看整個類別）
+const state = { cats: [], trips: [], places: [], photos: {}, urls: {}, urlsAt: 0, active: null, activeTrip: null, user: null };
 let map, layer;
 let form = null;     // 正在新增或編輯的地點
 
@@ -59,7 +61,9 @@ function fmtRange(a, b) {
   const [ya] = a.split('-'), [yb, mb, db] = b.split('-').map(Number);
   return ya === String(yb) ? `${fmtDate(a)} – ${mb}/${db}` : `${fmtDate(a)} – ${fmtDate(b)}`;
 }
+const cat = id => state.cats.find(c => c.id === id);
 const trip = id => state.trips.find(t => t.id === id);
+const colorOf = p => cat(p?.category_id)?.color || '#e4572e';
 function byDate(a, b) {
   const da = a.visited_on || '9999-12-31', db = b.visited_on || '9999-12-31';
   if (da !== db) return da < db ? -1 : 1;
@@ -68,6 +72,9 @@ function byDate(a, b) {
 const uuid = () => crypto.randomUUID ? crypto.randomUUID()
   : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 const tripPlaces = id => state.places.filter(p => p.trip_id === id).sort(byDate);
+const catTrips   = id => state.trips.filter(t => t.category_id === id);
+const catPlaces  = id => state.places.filter(p => p.category_id === id).sort(byDate);
+const soloPlaces = id => state.places.filter(p => p.category_id === id && !p.trip_id).sort(byDate);
 
 // 讓某個座標出現在畫面上方 40% 處（下面留給面板）
 function centerAt(latlng, zoom, ratio = 0.1) {
@@ -140,19 +147,21 @@ function start(user) {
 
 /* ============ 讀資料 ============ */
 async function load(fit = false) {
-  const [t, p, ph] = await Promise.all([
+  const [c, t, p, ph] = await Promise.all([
+    sb.from('categories').select('*').order('created_at'),
     sb.from('trips').select('*').order('created_at'),
     sb.from('places').select('*'),
     sb.from('photos').select('*').order('sort').order('created_at'),
   ]);
-  const err = t.error || p.error || ph.error;
+  const err = c.error || t.error || p.error || ph.error;
   if (err) { toast('讀取失敗：' + err.message); return; }
-  state.trips = t.data; state.places = p.data; state.photos = {};
+  state.cats = c.data; state.trips = t.data; state.places = p.data; state.photos = {};
   for (const x of ph.data) (state.photos[x.place_id] ||= []).push(x);
-  if (state.active && !trip(state.active)) state.active = null;
+  if (state.active && !cat(state.active)) state.active = null;
+  if (state.activeTrip && trip(state.activeTrip)?.category_id !== state.active) state.activeTrip = null;
   if (Date.now() - state.urlsAt > SIGN_TTL * 500) { state.urls = {}; state.urlsAt = Date.now(); }
   await signPaths(Object.values(state.photos).map(list => list[0].thumb_path));
-  renderTrips();
+  renderChips();
   renderMap(fit);
 }
 
@@ -164,24 +173,53 @@ async function signPaths(paths) {
   }
 }
 
-/* ============ 畫面：旅程列 ============ */
-function renderTrips() {
+/* ============ 畫面：上面兩排 ============ */
+// 第一排＝類別，第二排＝選中類別底下的旅程（沒選類別就不顯示）
+function renderChips() {
   const chips = $('#chips');
   let html = `<button class="chip ${state.active ? '' : 'active'}" data-id="">全部</button>`;
-  for (const t of state.trips) {
-    const on = state.active === t.id;
-    html += `<button class="chip ${on ? 'active' : ''}" data-id="${t.id}" style="--c:${esc(t.color)}">
-      <span class="dot"></span>${esc(t.title)}${on ? '<span class="edit">✎</span>' : ''}</button>`;
+  for (const c of state.cats) {
+    const on = state.active === c.id;
+    html += `<button class="chip ${on ? 'active' : ''}" data-id="${c.id}" style="--c:${esc(c.color)}">
+      <span class="dot"></span>${esc(c.title)}${on ? '<span class="edit">✎</span>' : ''}</button>`;
   }
-  html += `<button class="chip add" data-new="1">＋ 旅程</button>`;
+  html += `<button class="chip add" data-new="1">＋ 類別</button>`;
   chips.innerHTML = html;
   chips.querySelectorAll('.chip').forEach(b => b.onclick = () => {
-    if (b.dataset.new) return openTripEditor(null);
+    if (b.dataset.new) return openCatEditor(null);
     const id = b.dataset.id || null;
-    if (id && id === state.active) return openTripEditor(id);
+    if (id && id === state.active) return openCatEditor(id);
     state.active = id;
-    renderTrips(); renderMap(true);
+    state.activeTrip = null;
+    renderChips(); renderMap(true);
     if (id) b.scrollIntoView({ inline: 'center', behavior: 'smooth', block: 'nearest' });
+  });
+  renderSubChips();
+}
+
+function renderSubChips() {
+  const box = $('#subchips');
+  const c = cat(state.active);
+  if (!c) { box.hidden = true; box.innerHTML = ''; return; }
+  const ts = catTrips(c.id);
+  const nSolo = soloPlaces(c.id).length;
+  box.hidden = false;
+  let html = `<button class="chip ${state.activeTrip ? '' : 'active'}" data-id="" style="--c:${esc(c.color)}">全部</button>`;
+  for (const t of ts) {
+    const on = state.activeTrip === t.id;
+    html += `<button class="chip ${on ? 'active' : ''}" data-id="${t.id}" style="--c:${esc(c.color)}">
+      ${esc(t.title)}${on ? '<span class="edit">✎</span>' : ''}</button>`;
+  }
+  if (nSolo) html += `<button class="chip" data-id="solo" style="--c:${esc(c.color)}" disabled>單點 ${nSolo}</button>`;
+  html += `<button class="chip add" data-new="1">＋ 旅程</button>`;
+  box.innerHTML = html;
+  box.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    if (b.dataset.new) return openTripEditor(null, c.id);
+    const id = b.dataset.id || null;
+    if (id === 'solo') return;
+    if (id && id === state.activeTrip) return openTripEditor(id, c.id);
+    state.activeTrip = id;
+    renderSubChips(); renderMap(true);
   });
 }
 
@@ -189,39 +227,54 @@ function renderInfo() {
   const info = $('#info');
   if (!state.active) {
     info.hidden = state.places.length > 0;
-    info.textContent = state.trips.length ? '還沒有地點，按下面的「＋ 新增地點」開始吧' : '先建立一趟旅程，再把地點放上地圖';
+    info.textContent = state.cats.length ? '還沒有地點，按下面的「＋ 新增地點」開始吧' : '先建立一個類別，再把地點放上地圖';
     return;
   }
-  const ps = tripPlaces(state.active);
+  const ps = state.activeTrip ? tripPlaces(state.activeTrip) : catPlaces(state.active);
   const dates = ps.map(p => p.visited_on).filter(Boolean).sort();
+  const nTrips = catTrips(state.active).length;
+  const nSolo = soloPlaces(state.active).length;
   info.hidden = false;
-  info.textContent = ps.length
-    ? `${ps.length} 個地點${dates.length ? ' · ' + fmtRange(dates[0], dates[dates.length - 1]) : ''}`
-    : '這趟旅程還沒有地點';
+  if (!ps.length) { info.textContent = state.activeTrip ? '這趟旅程還沒有地點' : '這個類別還沒有地點'; return; }
+  const range = dates.length ? ' · ' + fmtRange(dates[0], dates[dates.length - 1]) : '';
+  info.textContent = state.activeTrip
+    ? `${ps.length} 個地點${range}`
+    : `${nTrips} 趟旅程${nSolo ? ` · ${nSolo} 個單點` : ''} · ${ps.length} 個地點${range}`;
 }
 
 /* ============ 畫面：地圖 ============ */
 function renderMap(fit) {
   layer.clearLayers();
-  const trips = state.active ? state.trips.filter(t => t.id === state.active) : state.trips;
+  const cats = state.active ? state.cats.filter(c => c.id === state.active) : state.cats;
   const bounds = [];
-  for (const t of trips) {
-    const ps = tripPlaces(t.id);
-    if (ps.length > 1) {
-      L.polyline(ps.map(p => [p.lat, p.lng]), { color: t.color, weight: 3, opacity: .85, dashArray: '2 8', lineCap: 'round' }).addTo(layer);
+
+  const addPin = (p, color, num) => {
+    const ph = state.photos[p.id]?.[0];
+    const url = ph && state.urls[ph.thumb_path];
+    const badge = num == null ? '' : `<b>${num}</b>`;
+    const html = `<div class="pin${url ? ' has-img' : ''}" style="--c:${esc(color)}">${url ? `<img src="${esc(url)}" alt="">` : ''}${badge}</div>`;
+    L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html, iconSize: [44, 44], iconAnchor: [22, 22] }) })
+      .on('click', () => openDetail(p.id))
+      .addTo(layer);
+    bounds.push([p.lat, p.lng]);
+  };
+
+  for (const c of cats) {
+    // 旅程：每一趟各自依日期連成一條線，地點有站號
+    for (const t of catTrips(c.id)) {
+      if (state.activeTrip && t.id !== state.activeTrip) continue;
+      const ps = tripPlaces(t.id);
+      if (ps.length > 1) {
+        L.polyline(ps.map(p => [p.lat, p.lng]), { color: c.color, weight: 3, opacity: .85, dashArray: '2 8', lineCap: 'round' }).addTo(layer);
+      }
+      ps.forEach((p, i) => addPin(p, c.color, i + 1));
     }
-    ps.forEach((p, i) => {
-      const ph = state.photos[p.id]?.[0];
-      const url = ph && state.urls[ph.thumb_path];
-      const html = `<div class="pin${url ? ' has-img' : ''}" style="--c:${esc(t.color)}">${url ? `<img src="${esc(url)}" alt="">` : ''}<b>${i + 1}</b></div>`;
-      L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html, iconSize: [44, 44], iconAnchor: [22, 22] }) })
-        .on('click', () => openDetail(p.id))
-        .addTo(layer);
-      bounds.push([p.lat, p.lng]);
-    });
+    // 單點：不連線、不編號；選了某一趟旅程時就不顯示
+    if (!state.activeTrip) for (const p of soloPlaces(c.id)) addPin(p, c.color, null);
   }
+
   if (fit && bounds.length) {
-    map.fitBounds(bounds, { paddingTopLeft: [40, 120], paddingBottomRight: [40, 110], maxZoom: 15 });
+    map.fitBounds(bounds, { paddingTopLeft: [40, 140], paddingBottomRight: [40, 110], maxZoom: 15 });
   }
   renderInfo();
 }
@@ -230,8 +283,9 @@ function renderMap(fit) {
 async function openDetail(id) {
   const p = state.places.find(x => x.id === id);
   if (!p) return;
-  const t = trip(p.trip_id);
-  const ps = tripPlaces(p.trip_id);
+  const c = cat(p.category_id);
+  const t = p.trip_id ? trip(p.trip_id) : null;
+  const ps = t ? tripPlaces(t.id) : [];           // 單點沒有同伴，不給上一站／下一站
   const idx = ps.findIndex(x => x.id === id);
   const photos = state.photos[id] || [];
   await signPaths(photos.flatMap(x => [x.path, x.thumb_path]));
@@ -242,7 +296,7 @@ async function openDetail(id) {
     <div class="detail-head"><h2>${esc(p.name || '未命名地點')}</h2></div>
     <div class="meta">
       ${p.visited_on ? `<span>${fmtDate(p.visited_on)}</span>` : ''}
-      ${t ? `<span class="tag" style="--c:${esc(t.color)}"><span class="dot"></span>${esc(t.title)} · 第 ${idx + 1} 站</span>` : ''}
+      ${c ? `<span class="tag" style="--c:${esc(c.color)}"><span class="dot"></span>${esc(c.title)}${t ? ` · ${esc(t.title)} · 第 ${idx + 1} 站` : ' · 單點'}</span>` : ''}
     </div>
     <p class="note ${p.note ? '' : 'empty'}">${p.note ? esc(p.note) : '（還沒寫下想說的話）'}</p>
     ${ps.length > 1 ? `<div class="stepper">
@@ -286,10 +340,12 @@ async function deletePlace(id) {
 
 /* ============ 新增 / 編輯地點 ============ */
 function startAdd() {
-  if (!state.trips.length) { toast('先建立一趟旅程吧'); return openTripEditor(null, true); }
+  if (!state.cats.length) { toast('先建立一個類別吧'); return openCatEditor(null, true); }
+  const category_id = state.active || state.cats[state.cats.length - 1].id;
   form = {
     id: null, lat: null, lng: null, name: '', note: '', visited_on: today(),
-    trip_id: state.active || [...state.trips].pop().id,
+    category_id,
+    trip_id: state.activeTrip && trip(state.activeTrip)?.category_id === category_id ? state.activeTrip : null,
     keep: [], removed: [], files: [],
   };
   enterPick();
@@ -406,10 +462,11 @@ async function usePhotoLocation(files) {
 /* --- 第二步：填內容 --- */
 function openForm() {
   document.body.classList.remove('picking');
-  const tripOpts = state.trips.map(t => `<option value="${t.id}" ${t.id === form.trip_id ? 'selected' : ''}>${esc(t.title)}</option>`).join('');
+  const catOpts = state.cats.map(c => `<option value="${c.id}" ${c.id === form.category_id ? 'selected' : ''}>${esc(c.title)}</option>`).join('');
   const sh = openSheet(`
     <h2>${form.id ? '編輯地點' : '新增地點'}</h2>
-    <label class="field"><span>旅程</span><select id="f-trip">${tripOpts}</select></label>
+    <label class="field"><span>類別</span><select id="f-cat">${catOpts}</select></label>
+    <label class="field"><span>放在哪裡</span><select id="f-trip"></select></label>
     <label class="field"><span>地點名稱</span><input id="f-name" value="${esc(form.name)}" placeholder="例如：清水寺"></label>
     <div class="loc-row"><span>📍 ${form.lat?.toFixed(4)}, ${form.lng?.toFixed(4)}</span><button class="small-btn" id="f-repick">改位置</button></div>
     <label class="field"><span>日期</span><input id="f-date" type="date" value="${esc(form.visited_on || '')}"></label>
@@ -420,13 +477,25 @@ function openForm() {
       <button class="btn primary" id="f-save">儲存</button>
     </div>`);
   renderThumbs();
+  renderTripOptions();
+  $('#f-cat', sh).onchange = () => { form.category_id = $('#f-cat').value; form.trip_id = null; renderTripOptions(); };
   $('#f-repick', sh).onclick = () => { syncForm(); enterPick(); };
   $('#f-cancel', sh).onclick = () => { const id = form.id; form = null; id ? openDetail(id) : closeSheet(); };
   $('#f-save', sh).onclick = save;
 }
 
+// 「放在哪裡」：這個類別底下的旅程，或是不屬於任何旅程的單點
+function renderTripOptions() {
+  const sel = $('#f-trip');
+  if (!sel) return;
+  const ts = catTrips(form.category_id);
+  sel.innerHTML = `<option value="" ${form.trip_id ? '' : 'selected'}>單獨一個點（不連線）</option>` +
+    ts.map(t => `<option value="${t.id}" ${t.id === form.trip_id ? 'selected' : ''}>旅程：${esc(t.title)}</option>`).join('');
+}
+
 function syncForm() {
-  form.trip_id = $('#f-trip').value;
+  form.category_id = $('#f-cat').value;
+  form.trip_id = $('#f-trip').value || null;
   form.name = $('#f-name').value.trim();
   form.visited_on = $('#f-date').value || null;
   form.note = $('#f-note').value.trim();
@@ -470,7 +539,7 @@ async function save() {
   const setBtn = t => { btn.textContent = t; };
   btn.disabled = true; setBtn('儲存中…');
   try {
-    const row = { trip_id: form.trip_id, name: form.name, lat: form.lat, lng: form.lng, visited_on: form.visited_on, note: form.note };
+    const row = { category_id: form.category_id, trip_id: form.trip_id || null, name: form.name, lat: form.lat, lng: form.lng, visited_on: form.visited_on, note: form.note };
     let placeId = form.id;
     if (placeId) {
       const { error } = await sb.from('places').update(row).eq('id', placeId);
@@ -507,7 +576,8 @@ async function save() {
 
     form._objUrls?.forEach(u => URL.revokeObjectURL(u));
     form = null;
-    if (state.active && state.active !== row.trip_id) state.active = row.trip_id;
+    if (state.active && state.active !== row.category_id) { state.active = row.category_id; state.activeTrip = null; }
+    if (state.activeTrip && state.activeTrip !== row.trip_id) state.activeTrip = null;
     await load();
     toast('已儲存 ✓');
     openDetail(placeId);
@@ -518,22 +588,70 @@ async function save() {
   }
 }
 
-/* ============ 旅程 ============ */
-function openTripEditor(id, thenAdd = false) {
-  const t = id ? trip(id) : null;
-  let color = t?.color || COLORS[state.trips.length % COLORS.length];
+/* ============ 類別 ============ */
+async function removePhotosOf(places) {
+  const paths = places.flatMap(p => (state.photos[p.id] || []).flatMap(x => [x.path, x.thumb_path]));
+  for (let i = 0; i < paths.length; i += 100) await sb.storage.from(BUCKET).remove(paths.slice(i, i + 100));
+}
+
+function openCatEditor(id, thenAdd = false) {
+  const c = id ? cat(id) : null;
+  let color = c?.color || COLORS[state.cats.length % COLORS.length];
   const sh = openSheet(`
-    <h2>${t ? '編輯旅程' : '新的旅程'}</h2>
-    <label class="field"><span>旅程名稱</span><input id="t-title" value="${esc(t?.title || '')}" placeholder="例如：2025 京都五日"></label>
-    <div class="field"><span>路線顏色</span><div class="swatches">${COLORS.map(c => `<button style="--c:${c}" data-c="${c}" class="${c === color ? 'on' : ''}" aria-label="${c}"></button>`).join('')}</div></div>
+    <h2>${c ? '編輯類別' : '新的類別'}</h2>
+    <label class="field"><span>類別名稱</span><input id="t-title" value="${esc(c?.title || '')}" placeholder="例如：旅遊、約會、美食"></label>
+    <div class="field"><span>顏色</span><div class="swatches">${COLORS.map(x => `<button style="--c:${x}" data-c="${x}" class="${x === color ? 'on' : ''}" aria-label="${x}"></button>`).join('')}</div></div>
     <div class="actions">
-      ${t ? '<button class="btn danger" id="t-del">刪除旅程</button>' : '<button class="btn" id="t-cancel">取消</button>'}
-      <button class="btn primary" id="t-save">${t ? '儲存' : '建立'}</button>
+      ${c ? '<button class="btn danger" id="t-del">刪除類別</button>' : '<button class="btn" id="t-cancel">取消</button>'}
+      <button class="btn primary" id="t-save">${c ? '儲存' : '建立'}</button>
     </div>`);
   sh.querySelectorAll('.swatches button').forEach(b => b.onclick = () => {
     color = b.dataset.c;
     sh.querySelectorAll('.swatches button').forEach(x => x.classList.toggle('on', x === b));
   });
+  if (!c) setTimeout(() => $('#t-title').focus(), 300);
+  $('#t-cancel', sh)?.addEventListener('click', closeSheet);
+  $('#t-save', sh).onclick = async () => {
+    const title = $('#t-title').value.trim();
+    if (!title) return toast('幫這個類別取個名字吧');
+    $('#t-save').disabled = true;
+    const q = c
+      ? sb.from('categories').update({ title, color }).eq('id', c.id).select().single()
+      : sb.from('categories').insert({ title, color }).select().single();
+    const { data, error } = await q;
+    if (error) { $('#t-save').disabled = false; return toast('儲存失敗：' + error.message); }
+    state.active = data.id; state.activeTrip = null;
+    closeSheet();
+    await load(true);
+    if (thenAdd) startAdd();
+  };
+  $('#t-del', sh)?.addEventListener('click', async () => {
+    const ps = catPlaces(c.id);
+    const nT = catTrips(c.id).length;
+    const detail = [nT ? `${nT} 趟旅程` : '', ps.length ? `${ps.length} 個地點和所有照片` : ''].filter(Boolean).join('、');
+    if (!await askConfirm(`確定要刪除類別「${c.title}」嗎？${detail ? `裡面的${detail}都會一起刪掉。` : ''}`)) return;
+    await removePhotosOf(ps);
+    const { error } = await sb.from('categories').delete().eq('id', c.id);
+    if (error) return toast('刪除失敗：' + error.message);
+    state.active = null; state.activeTrip = null;
+    closeSheet();
+    load(true);
+  });
+}
+
+/* ============ 旅程（在某個類別底下）============ */
+function openTripEditor(id, catId) {
+  const t = id ? trip(id) : null;
+  const c = cat(t?.category_id || catId);
+  if (!c) return toast('先選一個類別');
+  const sh = openSheet(`
+    <h2>${t ? '編輯旅程' : '新的旅程'}</h2>
+    <p class="sub" style="margin:-8px 0 12px">類別：${esc(c.title)}</p>
+    <label class="field"><span>旅程名稱</span><input id="t-title" value="${esc(t?.title || '')}" placeholder="例如：2025 京都五日"></label>
+    <div class="actions">
+      ${t ? '<button class="btn danger" id="t-del">刪除旅程</button>' : '<button class="btn" id="t-cancel">取消</button>'}
+      <button class="btn primary" id="t-save">${t ? '儲存' : '建立'}</button>
+    </div>`);
   if (!t) setTimeout(() => $('#t-title').focus(), 300);
   $('#t-cancel', sh)?.addEventListener('click', closeSheet);
   $('#t-save', sh).onclick = async () => {
@@ -541,23 +659,21 @@ function openTripEditor(id, thenAdd = false) {
     if (!title) return toast('幫這趟旅程取個名字吧');
     $('#t-save').disabled = true;
     const q = t
-      ? sb.from('trips').update({ title, color }).eq('id', t.id).select().single()
-      : sb.from('trips').insert({ title, color }).select().single();
+      ? sb.from('trips').update({ title }).eq('id', t.id).select().single()
+      : sb.from('trips').insert({ title, category_id: c.id }).select().single();
     const { data, error } = await q;
     if (error) { $('#t-save').disabled = false; return toast('儲存失敗：' + error.message); }
-    state.active = data.id;
+    state.active = c.id; state.activeTrip = data.id;
     closeSheet();
     await load(true);
-    if (thenAdd) startAdd();
   };
   $('#t-del', sh)?.addEventListener('click', async () => {
-    const n = tripPlaces(t.id).length;
-    if (!await askConfirm(`確定要刪除「${t.title}」嗎？${n ? `裡面的 ${n} 個地點和所有照片都會一起刪掉。` : ''}`)) return;
-    const paths = tripPlaces(t.id).flatMap(p => (state.photos[p.id] || []).flatMap(x => [x.path, x.thumb_path]));
-    for (let i = 0; i < paths.length; i += 100) await sb.storage.from(BUCKET).remove(paths.slice(i, i + 100));
+    const ps = tripPlaces(t.id);
+    if (!await askConfirm(`確定要刪除旅程「${t.title}」嗎？${ps.length ? `裡面的 ${ps.length} 個地點和所有照片都會一起刪掉。` : ''}`)) return;
+    await removePhotosOf(ps);
     const { error } = await sb.from('trips').delete().eq('id', t.id);
     if (error) return toast('刪除失敗：' + error.message);
-    state.active = null;
+    state.activeTrip = null;
     closeSheet();
     load(true);
   });
@@ -567,8 +683,8 @@ function openTripEditor(id, thenAdd = false) {
 function openMenu() {
   const nPhotos = Object.values(state.photos).reduce((s, l) => s + l.length, 0);
   const sh = openSheet(`
-    <h2>${esc(cfg.title || '我們的地圖')}</h2>
-    <p class="sub">${state.trips.length} 趟旅程 · ${state.places.length} 個地點 · ${nPhotos} 張照片</p>
+    <h2>${esc(cfg.title || '回憶地圖')}</h2>
+    <p class="sub">${state.cats.length} 個類別 · ${state.trips.length} 趟旅程 · ${state.places.length} 個地點 · ${nPhotos} 張照片</p>
     <p class="sub">目前登入：${esc(state.user?.email || '')}</p>
     <div class="actions" style="margin-top:16px">
       <button class="btn" id="m-reload">重新整理</button>

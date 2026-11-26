@@ -42,6 +42,14 @@ input, select, textarea { font: inherit; font-size: 16px; color: var(--ink); }
 .chip .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
 .chip .edit { font-size: 12px; opacity: .75; margin-left: 2px; }
 .chip.add { color: var(--accent); font-weight: 600; }
+/* 第二排：選中的類別底下有哪些旅程 */
+.chips.sub { padding-top: 0; }
+.chips.sub .chip {
+  height: 30px; padding: 0 12px; border-radius: 15px; font-size: 13.5px;
+  background: rgba(255, 255, 255, .94);
+}
+.chips.sub .chip.active { background: var(--c, var(--ink)); color: #fff; }
+.chips.sub .chip .dot { width: 8px; height: 8px; }
 #info {
   display: inline-block; margin: 2px 12px 0; padding: 5px 11px; border-radius: 10px;
   background: rgba(255, 255, 255, .94); font-size: 13px; color: var(--muted); box-shadow: var(--shadow);
@@ -69,7 +77,16 @@ input, select, textarea { font: inherit; font-size: 16px; color: var(--ink); }
   display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 16px;
 }
 .pin.has-img { background: #fff; }
-.leaflet-container .pin img { width: 100% !important; height: 100% !important; border-radius: 50%; object-fit: cover; display: block; }
+/* 用 position:absolute + inset:0 撐滿，不要用 height:100%：
+   .pin 是 grid 且列高 auto，百分比高度會變成循環參照而退回 auto，
+   直式照片（手機最常見）就會算成 39x52 爆出圓框外。
+   選擇器不加 .leaflet-container，這樣 pin 用在地圖以外也正常。
+   !important 是為了壓過 Leaflet 的 .leaflet-marker-pane img { width:auto }。*/
+.pin img {
+  position: absolute; inset: 0;
+  width: 100% !important; height: 100% !important;
+  border-radius: 50%; object-fit: cover; display: block;
+}
 .pin.has-img b {
   position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 5px;
   border-radius: 10px; background: var(--c); border: 2px solid #fff; font-size: 11px; line-height: 16px; text-align: center;
@@ -190,8 +207,7 @@ button:disabled { opacity: .55; }
   position: fixed; inset: 0; z-index: 5000; background: var(--bg); display: grid; place-items: center; padding: 24px;
 }
 #login-form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
-#login-form h1 { margin: 0; font-size: 26px; }
-#login-form p { margin: 0 0 10px; color: var(--muted); }
+#login-form h1 { margin: 0 0 10px; font-size: 26px; }
 .login-mark { font-size: 44px; }
 #login-form input { padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 #login-form button { height: 50px; border-radius: 14px; font-size: 17px; }

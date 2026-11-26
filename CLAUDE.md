@@ -25,9 +25,13 @@
 - 有 PWA manifest 和圖示，可以加到手機主畫面
 
 ## 資料庫（schema.sql）
+**三層結構**（2026-11-26 改的）：類別 →（旅程 → 地點）或（直接是單點）
 - `members(email)`：允許名單；`is_member()` 是 security definer 函式，檢查 `auth.jwt()->>'email'`
-- `trips(id, title, color, created_by, created_at)`
-- `places(id, trip_id → trips on delete cascade, name, lat, lng, visited_on date, note, ...)`
+- `categories(id, title, color, created_by, created_at)`：**顏色在這一層**，名字和顏色都可自訂
+- `trips(id, category_id → categories on delete cascade, title, ...)`：**沒有 color 欄位**，顏色跟著類別走
+- `places(id, category_id → categories on delete cascade, trip_id → trips on delete cascade **可為 null**, name, lat, lng, visited_on date, note, ...)`
+  - `trip_id` 是 null＝**單點**：照常顯示在地圖上，但不編號、不連進任何路線
+  - `trip_id` 有值＝屬於那趟旅程，依日期排序後連成虛線並標上站號
 - `photos(id, place_id → places on delete cascade, path, thumb_path, sort, ...)`
 - 所有資料表都開了 RLS，policy 為 `to authenticated using (is_member())`；storage bucket `photos` 也一樣
 - Storage 路徑：`{place_id}/{uuid}.jpg` 和 `{place_id}/{uuid}_t.jpg`
@@ -36,10 +40,13 @@
 ## app.js 主要流程
 - `init` → 有 session 就 `start`，沒有就顯示登入畫面（email + 密碼）
 - `load()`：抓 trips、places、photos，產生縮圖的 signed URL，畫出旅程列和地圖
-- 上方旅程列：「全部」＋每趟旅程；點一下已選中的旅程會開啟編輯（改名、換色、刪除）
+- 上方有**兩排**：第一排是類別（`renderChips`），選了類別之後第二排才出現，是那個類別底下的旅程（`renderSubChips`）
+  - 兩排都是「點一下已選中的那個就開啟編輯」：類別可改名、換色、刪除；旅程只能改名、刪除（顏色由類別決定）
+  - 第二排還會顯示「單點 N」當作數量提示，那顆是 disabled 的，不能點
 - 新增地點分兩步：
   1. `enterPick()`：準心固定在畫面高度 40% 的位置，可以搜尋、定位，或「用照片的位置」讀 EXIF
-  2. `openForm()`：填旅程、名稱、日期、照片、想說的話，然後 `save()`
+  2. `openForm()`：填**類別**、**放在哪裡**（「單獨一個點（不連線）」或該類別底下的某趟旅程）、名稱、日期、照片、想說的話，然後 `save()`
+     - 換類別時 `renderTripOptions()` 會重畫「放在哪裡」，並把 `trip_id` 歸零
 - `save()` 在新增地點後就把 `form.id` 設好，照片逐張上傳並移進 `form.keep`，所以失敗後「再試一次」不會重複新增
 - 詳細頁：照片輪播（scroll-snap）、全螢幕燈箱、上一站／下一站、編輯、刪除
 - App 回到前景（`visibilitychange`）時會重新載入，才看得到對方新增的內容
@@ -98,6 +105,35 @@
 實測：確認視窗正常跳出 → 按刪除 → 旅程、地點、照片、storage 檔案全部清掉（trips/places/photos 都是 0，bucket 也空了），cascade 和 storage 清理都正確。
 
 測試資料已經全部刪乾淨，資料庫現在是空的。
+
+## 2026-11-26 的三項修改
+
+### 1. 照片會超出圓形標記（已修）
+`.pin` 是 `display:grid` 而且列高 auto，所以 `.pin img` 的 `height:100%` 變成**循環參照**，
+瀏覽器退回 `auto`＝依寬度和原始比例算高度。實測：3000×4000 的直式照片在 44×44 的 pin 裡算成 **39×52**，
+400×3000 更誇張，算成 39×294。**手機拍的大多是直式，所以很容易遇到。**
+改成 `position:absolute; inset:0` 讓圖片貼著 `.pin` 的 padding box 撐滿，百分比就不再循環。
+選擇器也從 `.leaflet-container .pin img` 改成 `.pin img`，這樣 pin 用在地圖以外的地方也不會爆
+（舊的寫法在 `.leaflet-container` 外完全不生效，圖片會用原始尺寸）。
+`!important` 要留著，是為了壓過 Leaflet 的 `.leaflet-marker-pane img { width:auto }`。
+實測 5 種比例 ×（地圖內／外）共 10 個，全部 39×39、零溢出、編號角標也還在。
+
+### 2. 加入「類別」這一層
+見上面的「資料庫」段落。**現有資料要跑 `migrate-categories.sql` 才會變成新結構**
+（每一趟舊旅程 → 一個同名同色的類別，底下保留一趟同名旅程，地點和路線都不變；
+跑之前會自動備份到 `_backup_trips_20261126` / `_backup_places_20261126`）。
+
+**順序很重要：先跑 migration，再部署新版 app。** 反過來的話 app 會查不到 `categories` 這張表。
+
+用假的 in-memory Supabase（`scratchpad/mock/mock.js`，有模擬 cascade）在 375×812 跑過：
+建類別、建旅程、類別／旅程兩層篩選、單點不連線也不編號、旅程連線並編號 1..N、
+把單點改成旅程的一站（編號變 1..4）、刪旅程（底下地點 cascade，其他類別的單點不受影響）、
+刪類別（整包清掉）、表單換類別時旅程清單跟著換。console 無錯誤。
+
+### 3. 改名
+標題「我們的地圖」→「**回憶地圖**」（`config.js`、`index.html` 的 title 和 apple-mobile-web-app-title、
+`manifest.json` 的 name/short_name、`app.js` 的預設值），登入畫面的副標「只有我們兩個能看」整行刪掉，
+順手把因此沒用到的 `#login-form p` 樣式也拿掉。
 
 ## 部署狀態（2026-11-21）
 

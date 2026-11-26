@@ -25,7 +25,10 @@ as $$
 $$;
 
 -- 2. 資料表
-create table public.trips (
+--    類別（有名字、有顏色）
+--      ├─ 旅程：多個地點，依日期連成一條線
+--      └─ 單點：單獨的地點，trip_id 是 null，不連線
+create table public.categories (
   id          uuid primary key default gen_random_uuid(),
   title       text not null,
   color       text not null default '#e4572e',
@@ -33,9 +36,18 @@ create table public.trips (
   created_at  timestamptz not null default now()
 );
 
+create table public.trips (
+  id          uuid primary key default gen_random_uuid(),
+  category_id uuid not null references public.categories(id) on delete cascade,
+  title       text not null,
+  created_by  uuid default auth.uid(),
+  created_at  timestamptz not null default now()
+);
+
 create table public.places (
   id          uuid primary key default gen_random_uuid(),
-  trip_id     uuid not null references public.trips(id) on delete cascade,
+  category_id uuid not null references public.categories(id) on delete cascade,
+  trip_id     uuid references public.trips(id) on delete cascade,   -- null = 單點
   name        text not null default '',
   lat         double precision not null,
   lng         double precision not null,
@@ -54,15 +66,20 @@ create table public.photos (
   created_at  timestamptz not null default now()
 );
 
+create index on public.trips  (category_id);
+create index on public.places (category_id);
 create index on public.places (trip_id);
 create index on public.photos (place_id);
 
 -- 3. 權限：只有 members 裡的帳號能存取
 alter table public.members enable row level security;  -- 不開任何 policy：外部完全讀不到名單
+alter table public.categories enable row level security;
 alter table public.trips   enable row level security;
 alter table public.places  enable row level security;
 alter table public.photos  enable row level security;
 
+create policy "members only" on public.categories
+  for all to authenticated using (public.is_member()) with check (public.is_member());
 create policy "members only" on public.trips
   for all to authenticated using (public.is_member()) with check (public.is_member());
 create policy "members only" on public.places
@@ -76,6 +93,7 @@ create policy "members only" on public.photos
 -- 新表預設不會給 authenticated 權限，app 會收到 42501 permission denied。
 -- members 故意不給權限：is_member() 是 security definer，由它代為讀取。
 grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.categories to authenticated;
 grant select, insert, update, delete on public.trips  to authenticated;
 grant select, insert, update, delete on public.places to authenticated;
 grant select, insert, update, delete on public.photos to authenticated;

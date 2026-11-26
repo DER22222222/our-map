@@ -1,6 +1,6 @@
 {
-  "name": "我們的地圖",
-  "short_name": "我們的地圖",
+  "name": "回憶地圖",
+  "short_name": "回憶地圖",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#fbf7f1",

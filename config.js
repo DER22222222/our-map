@@ -3,5 +3,5 @@
 window.APP_CONFIG = {
   supabaseUrl: 'https://jqjlxfcrwcuihpezrhph.supabase.co',
   supabaseKey: 'sb_publishable_5z_f0Q1amy_2-IHRb0xeCg_U8ESfFf1',
-  title: '我們的地圖',
+  title: '回憶地圖',
 };
